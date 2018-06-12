@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/auth0/go-jwt-middleware"
+	"github.com/dgrijalva/jwt-go"
+	"github.com/gorilla/mux"
 	"github.com/pborman/uuid"
 	elastic "gopkg.in/olivere/elastic.v3"
 	"io"
@@ -30,10 +33,12 @@ const (
 	INDEX    = "social-network"
 	TYPE     = "post"
 	DISTANCE = "200km"
-	ES_URL   = "http://35.229.59.142:9200"
+	ES_URL   = "http://35.237.123.235:9200"
 
 	BUCKET_NAME = "social-network-206503"
 )
+
+var mySigningKey = []byte("secret")
 
 func main() {
 	// Create a client
@@ -69,8 +74,24 @@ func main() {
 	}
 
 	fmt.Println("started-service")
-	http.HandleFunc("/post", handlerPost)
-	http.HandleFunc("/search", handlerSearch)
+
+	r := mux.NewRouter()
+
+	var jwtMiddleware = jwtmiddleware.New(jwtmiddleware.Options{
+		ValidationKeyGetter: func(token *jwt.Token) (interface{}, error) {
+			return mySigningKey, nil
+		},
+		SigningMethod: jwt.SigningMethodHS256,
+	})
+
+	//http.HandleFunc("/post", handlerPost)
+	//http.HandleFunc("/search", handlerSearch)
+	r.Handle("/post", jwtMiddleware.Handler(http.HandlerFunc(handlerPost))).Methods("POST")
+	r.Handle("/search", jwtMiddleware.Handler(http.HandlerFunc(handlerSearch))).Methods("GET")
+	r.Handle("/login", http.HandlerFunc(loginHandler)).Methods("POST")
+	r.Handle("/signup", http.HandlerFunc(signupHandler)).Methods("POST")
+
+	http.Handle("/", r)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
@@ -87,6 +108,10 @@ func handlerPost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Contro-Allow-Headers", "Contect-Type, Autorization")
 
+	user := r.Context().Value("user")
+	claims := user.(*jwt.Token).Claims
+	username := claims.(jwt.MapClaims)["username"]
+
 	r.ParseMultipartForm(32 << 20)
 
 	// Parse form data
@@ -95,7 +120,7 @@ func handlerPost(w http.ResponseWriter, r *http.Request) {
 	lon, _ := strconv.ParseFloat(r.FormValue("lon"), 64)
 
 	p := &Post{
-		User:    "1111",
+		User:    username.(string),
 		Message: r.FormValue("message"),
 		Location: Location{
 			Lat: lat,
@@ -209,7 +234,7 @@ func handlerSearch(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
-	fmt.Println("Query took %d milliseconds\n", searchResult.TookInMillis)
+	fmt.Printf("Query took %d milliseconds\n", searchResult.TookInMillis)
 	fmt.Printf("Found a total of %d posts\n", searchResult.TotalHits())
 
 	var typ Post
