@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cloud.google.com/go/bigtable"
 	"cloud.google.com/go/storage"
 	"context"
 	"encoding/json"
@@ -33,9 +34,11 @@ const (
 	INDEX    = "social-network"
 	TYPE     = "post"
 	DISTANCE = "200km"
-	ES_URL   = "http://35.237.123.235:9200"
+	ES_URL   = "http://35.237.142.10:9200"
 
 	BUCKET_NAME = "social-network-206503"
+	PROJECT_ID  = "social-network-206503"
+	BT_INSTANCE = "social-network-bigtable"
 )
 
 var mySigningKey = []byte("secret")
@@ -150,6 +153,9 @@ func handlerPost(w http.ResponseWriter, r *http.Request) {
 
 	// Save to ES
 	saveToES(p, id)
+
+	// Save to Bigtable
+	saveToBigtable(p, id)
 }
 
 func saveToGCS(ctx context.Context, r io.Reader, bucketName, name string) (*storage.ObjectHandle, *storage.ObjectAttrs, error) {
@@ -181,6 +187,32 @@ func saveToGCS(ctx context.Context, r io.Reader, bucketName, name string) (*stor
 	attrs, err := obj.Attrs(ctx)
 	fmt.Printf("Post is saved to GCS: %v\n", attrs.MediaLink)
 	return obj, attrs, err
+}
+
+func saveToBigtable(p *Post, id string) {
+	ctx := context.Background()
+	// update project name
+	bt_client, err := bigtable.NewClient(ctx, PROJECT_ID, BT_INSTANCE)
+	if err != nil {
+		panic(err)
+		return
+	}
+
+	tbl := bt_client.Open("post")
+	mut := bigtable.NewMutation() // similar to one query
+	t := bigtable.Now()
+
+	mut.Set("post", "user", t, []byte(p.User))
+	mut.Set("post", "message", t, []byte(p.Message))
+	mut.Set("location", "lat", t, []byte(strconv.FormatFloat(p.Location.Lat, 'f', -1, 64)))
+	mut.Set("location", "lon", t, []byte(strconv.FormatFloat(p.Location.Lon, 'f', -1, 64)))
+
+	err = tbl.Apply(ctx, id, mut)
+	if err != nil {
+		panic(err)
+		return
+	}
+	fmt.Printf("Post is saved to Bigtable: %s\n", p.Message)
 }
 
 func saveToES(p *Post, id string) {
